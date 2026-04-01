@@ -42,14 +42,31 @@ pip install -r requirements.txt
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
 
+## Features
+
+| Feature | Description |
+|---|---|
+| **Multi-pet support** | Add as many pets as needed; all tasks are managed under one owner |
+| **Priority-first scheduling** | High → Medium → Low ordering within each time slot |
+| **Recurring tasks** | Daily and weekly tasks auto-advance their due date on completion |
+| **Overlap-aware conflict detection** | Flags tasks whose time windows overlap; warns without blocking |
+| **Next-available-slot suggestion** | Auto-suggests the first gap in the schedule that fits a new task's duration |
+| **Data persistence** | State is saved to `data.json` after every action and reloaded on startup |
+| **Due-date filtering** | Only today's tasks appear in the schedule; future and completed recurring tasks are excluded |
+
+## 📸 Demo
+
+<a href="/course_images/ai110/pawpal_screenshot.png" target="_blank"><img src='/course_images/ai110/pawpal_screenshot.png' title='PawPal App' width='' alt='PawPal App' class='center-block' /></a>
+
 ## Project structure
 
 ```
 pawpal_system.py   # Core logic — Task, Pet, Owner, Scheduler classes
 app.py             # Streamlit UI (imports from pawpal_system)
 main.py            # CLI demo — run `python main.py` to verify logic in terminal
+data.json          # Auto-generated; persists owner/pet/task state between runs
 tests/
-  test_pawpal.py   # pytest suite
+  test_pawpal.py   # pytest suite (47 tests)
 reflection.md      # Design decisions and AI-collaboration notes
 ```
 
@@ -106,6 +123,10 @@ classDiagram
         +add_pet(pet)
         +get_pet(name) Pet
         +get_all_tasks() List
+        +to_dict() dict
+        +save_to_json(path)
+        +load_from_json(path)$ Owner
+        +data_file_exists(path)$ bool
     }
 
     class Scheduler {
@@ -116,6 +137,7 @@ classDiagram
         +filter_by_status(completed) List
         +build_schedule() List
         +detect_conflicts() List~str~
+        +next_available_slot(duration, earliest) str
         +mark_task_complete(pet, task) bool
     }
 
@@ -141,3 +163,36 @@ Tasks have a `frequency` field (`once / daily / weekly`). Calling `mark_complete
 
 ### 4. Due-date filtering
 `build_schedule()` only includes tasks where `due_date ≤ today`. Future tasks and just-completed recurring tasks (whose due date has been advanced) are automatically excluded from the day's plan, keeping the view clean.
+
+### 5. Next-available-slot suggestion (Challenge 1)
+`Scheduler.next_available_slot(duration_minutes)` scans existing time windows in chronological order and returns the first gap wide enough to fit a new task without overlap. The Streamlit UI pre-fills the time input with this suggestion whenever a duration is entered.
+
+### 6. Data persistence (Challenge 2)
+`Owner.save_to_json()` and `Owner.load_from_json()` serialise the full object graph (owner → pets → tasks, including `date` fields) to `data.json`. The Streamlit app auto-saves after every mutation and reloads on startup, so no data is lost between browser refreshes or app restarts.
+
+---
+
+## Testing PawPal+
+
+```bash
+python -m pytest          # run all tests
+python -m pytest -v       # verbose output with test names
+```
+
+The test suite (`tests/test_pawpal.py`) covers:
+
+| Area | What is verified |
+|---|---|
+| Task completion | `once` tasks close permanently; `daily`/`weekly` tasks advance due date and stay active |
+| End-time arithmetic | `end_time()` computes correctly, including hour-crossing cases |
+| Due-date logic | Overdue tasks are still shown; future tasks are excluded |
+| Pet task management | `add_task`, `remove_task`, task count integrity |
+| Owner aggregation | `get_all_tasks` collects across all pets |
+| Scheduler sorting | Chronological and priority ordering |
+| Scheduler filtering | By pet name and by completion status |
+| Conflict detection | Overlapping windows flagged; adjacent windows pass cleanly |
+| `build_schedule` | Only due tasks included |
+| Persistence round-trip | `save_to_json` → `load_from_json` preserves all fields including dates |
+| Next-available-slot | Returns correct gap; skips gaps too small; falls back to after last task |
+
+**Confidence: ★★★★☆** — All 47 tests pass. Core scheduling logic is thoroughly covered. Known gap: tasks spanning midnight (e.g., `23:30` + 90 min) would produce an invalid `end_time` string; this edge case is documented but not yet handled.

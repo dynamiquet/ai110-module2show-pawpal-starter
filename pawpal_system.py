@@ -4,6 +4,8 @@ PawPal+ — Core logic layer.
 Classes: Task, Pet, Owner, Scheduler
 """
 
+import json
+import os
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
@@ -90,6 +92,68 @@ class Owner:
         """Return every (pet, task) pair across all pets."""
         return [(pet, task) for pet in self.pets for task in pet.tasks]
 
+    # --- Persistence ---
+
+    def to_dict(self) -> dict:
+        """Serialise the owner and all pets/tasks to a plain dictionary."""
+        return {
+            "name": self.name,
+            "pets": [
+                {
+                    "name": pet.name,
+                    "species": pet.species,
+                    "tasks": [
+                        {
+                            "title": t.title,
+                            "time": t.time,
+                            "duration_minutes": t.duration_minutes,
+                            "priority": t.priority,
+                            "frequency": t.frequency,
+                            "description": t.description,
+                            "completed": t.completed,
+                            "due_date": t.due_date.isoformat(),
+                        }
+                        for t in pet.tasks
+                    ],
+                }
+                for pet in self.pets
+            ],
+        }
+
+    def save_to_json(self, path: str = "data.json") -> None:
+        """Persist the owner's full state to a JSON file."""
+        with open(path, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def load_from_json(cls, path: str = "data.json") -> "Owner":
+        """Reconstruct an Owner (with all pets and tasks) from a JSON file."""
+        with open(path) as f:
+            data = json.load(f)
+        owner = cls(data["name"])
+        for pet_data in data["pets"]:
+            pet = Pet(pet_data["name"], pet_data["species"])
+            for td in pet_data["tasks"]:
+                pet.add_task(
+                    Task(
+                        title=td["title"],
+                        time=td["time"],
+                        duration_minutes=td["duration_minutes"],
+                        priority=td["priority"],
+                        frequency=td["frequency"],
+                        description=td.get("description", ""),
+                        completed=td.get("completed", False),
+                        due_date=date.fromisoformat(td["due_date"]),
+                    )
+                )
+            owner.add_pet(pet)
+        return owner
+
+    @staticmethod
+    def data_file_exists(path: str = "data.json") -> bool:
+        """Return True if a saved data file exists at the given path."""
+        return os.path.isfile(path)
+
 
 class Scheduler:
     """Organizes, filters, and analyzes an owner's pet care tasks."""
@@ -156,6 +220,34 @@ class Scheduler:
                         f"'{task_j.title}' ({pet_j.name}, starts {task_j.time})"
                     )
         return conflicts
+
+    # --- Advanced scheduling ---
+
+    def next_available_slot(self, duration_minutes: int, earliest: str = "07:00") -> str:
+        """
+        Return the earliest HH:MM start time that fits a new task of the given
+        duration without overlapping any existing task.
+
+        Scans the day's occupied windows in chronological order and returns the
+        first gap that is wide enough. If no gap exists before the last task
+        ends, the slot is placed immediately after the last task.
+        """
+        occupied = sorted(
+            [(t.time, t.end_time()) for _, t in self.sort_by_time()]
+        )
+        candidate = earliest
+        for start, end in occupied:
+            if candidate >= end:
+                continue  # candidate already falls after this task
+            # Compute where candidate would end
+            h, m = map(int, candidate.split(":"))
+            total = h * 60 + m + duration_minutes
+            candidate_end = f"{total // 60:02d}:{total % 60:02d}"
+            if candidate_end <= start:
+                return candidate  # fits in the gap before this task starts
+            # Doesn't fit — skip past this task
+            candidate = end
+        return candidate
 
     # --- Task management ---
 

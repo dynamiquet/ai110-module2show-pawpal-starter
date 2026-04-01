@@ -4,23 +4,15 @@
 
 **a. Initial design**
 
-My initial design centred on four classes that map directly to real-world entities:
+I went with four classes: `Task`, `Pet`, `Owner`, and `Scheduler`.
 
-- **Task** (dataclass) — holds everything about a single care activity: title, start time, duration, priority (`high / medium / low`), recurrence frequency (`once / daily / weekly`), a due date, and a `completed` flag.
-- **Pet** (dataclass) — stores a pet's name, species, and an owned list of `Task` objects. Exposes `add_task`, `remove_task`, and `get_tasks`.
-- **Owner** — manages a collection of `Pet` objects and provides a convenience method (`get_all_tasks`) that flattens every pet's tasks into a single `(pet, task)` list. This is the data source the `Scheduler` reads from.
-- **Scheduler** — the algorithmic brain. It receives an `Owner` and implements sorting (by time, by priority), filtering (by pet, by completion status), conflict detection, and the `build_schedule` method that produces today's prioritised plan.
+`Task` holds all the info about one care activity — title, time, duration, priority, frequency, and whether it's done. `Pet` stores the pet's name and species and keeps a list of its tasks. `Owner` just holds a list of pets and has a method to pull all tasks across all of them. `Scheduler` is the main logic class — it sorts, filters, detects conflicts, and builds the daily plan.
 
-Three core user actions the system supports:
-1. **Add a pet** — create a `Pet` and register it with the `Owner`.
-2. **Schedule a task** — create a `Task` with a time and priority and attach it to the chosen pet.
-3. **View today's plan** — call `Scheduler.build_schedule()` to get a sorted, filtered list of due tasks, and inspect `detect_conflicts()` for overlap warnings.
+The three main things a user can do: add a pet, add a task to that pet, and generate today's schedule.
 
 **b. Design changes**
 
-Yes, one significant change: I initially planned for `Scheduler` to own the conflict-detection logic using only exact start-time matching (two tasks conflict if they start at the same minute). During implementation I realised this would miss the common case where one task *starts inside* another task's window.
-
-I added an `end_time()` method to `Task` so the scheduler could compare a task's start time against the previous task's end time. The change required no restructuring — it was additive — but it made the conflict detection meaningfully more accurate.
+Originally conflict detection just checked if two tasks had the same start time. That's too simple — if one task runs from 9:00 to 10:00 and another starts at 9:30, that's still a conflict. So I added `end_time()` to `Task` so the scheduler could actually compare windows. Wasn't a big change but made it more accurate.
 
 ---
 
@@ -28,24 +20,13 @@ I added an `end_time()` method to `Task` so the scheduler could compare a task's
 
 **a. Constraints and priorities**
 
-The scheduler considers:
-- **Priority** (`high → medium → low`) — tasks that matter more appear first in the plan.
-- **Time** (HH:MM) — within the same priority level, tasks are ordered chronologically.
-- **Due date** — `build_schedule` only includes tasks whose `due_date ≤ today`, so future tasks and already-advanced recurring tasks are excluded.
-- **Frequency** — `once` tasks can be permanently completed; `daily` and `weekly` tasks advance their due date on completion and remain active.
+The scheduler sorts by priority first (high → medium → low), then by time. It also only shows tasks due today or overdue — future tasks and recurring tasks that were already completed don't show up. Recurring tasks just advance their due date instead of being permanently marked done.
 
-Priority was treated as the primary constraint because a late-but-critical task (a medication, for example) should never be buried behind a low-priority grooming session.
+Priority comes first because you don't want a medication buried under a low-priority grooming task.
 
 **b. Tradeoffs**
 
-The scheduler flags overlapping tasks as warnings but does not block them. If two tasks overlap, the schedule still renders — the user sees a warning banner at the top.
-
-This is a reasonable tradeoff because a warning-only approach:
-1. Avoids blocking valid scenarios (e.g., two pets can be walked simultaneously by different people).
-2. Keeps the UI informational rather than restrictive, which is appropriate for a planning assistant rather than a booking system.
-3. Is far simpler to implement correctly than a full constraint-satisfaction solver.
-
-The known limitation is that the system only checks for time-window overlaps, not resource conflicts (e.g., a single owner can't physically do two things at once). A future version could add an "owner capacity" constraint.
+If two tasks overlap, the scheduler shows a warning but doesn't block the schedule. I did it this way because sometimes two pets can have tasks at the same time if there's more than one person helping out. Blocking it would be too strict. The tradeoff is the system can't tell when it's actually a real problem vs. when it's fine — it just flags everything and lets the user decide.
 
 ---
 
@@ -53,18 +34,19 @@ The known limitation is that the system only checks for time-window overlaps, no
 
 **a. How you used AI**
 
-AI was used in three distinct phases:
-- **Design brainstorming** — generating the initial Mermaid UML diagram and checking whether the class responsibilities were well-separated.
-- **Algorithmic scaffolding** — asking for idiomatic Python patterns (e.g., `sorted()` with a tuple key, `dataclasses.field(default_factory=...)`) to avoid reinventing standard library features.
-- **Test generation** — drafting an initial test suite and then refining edge-case coverage (recurring task state after completion, overlapping vs. adjacent time windows).
+Mostly used it for three things: generating the UML diagram to start, helping with specific implementations like the sorting logic and recurring task handling, and generating tests. 
 
-The most useful prompt pattern was giving the AI a concrete failing scenario ("if a daily task is marked done, it should not appear as completed but should be due tomorrow — how should `mark_complete` handle this?") rather than asking it to design the whole method from scratch.
+The most useful pattern was asking about one specific thing at a time — like "how should mark_complete work for a daily task" instead of "build the scheduler." The broad prompts gave too much stuff to review.
+
+Keeping separate chat sessions per phase helped because the AI wasn't carrying baggage from earlier decisions when I was trying to just focus on tests.
 
 **b. Judgment and verification**
 
-The AI initially suggested storing task times as `datetime` objects (with full date + time) rather than plain `"HH:MM"` strings. The suggestion was technically correct and would have made arithmetic easier, but it introduced timezone handling, serialisation complexity, and friction when reading times from a Streamlit text input.
+AI suggested using `datetime` objects for the time field instead of `"HH:MM"` strings. It's technically more correct but would've made everything more complicated — JSON serialization, timezones, converting Streamlit input. I kept strings and just did the math manually in `end_time()`. Wrote a test for it to make sure the arithmetic didn't break on edge cases like hour-crossing.
 
-I evaluated the tradeoff and kept `str` for the time field. `end_time()` does the arithmetic manually (converts to total minutes, then back), which is a few extra lines but keeps the rest of the codebase simple. I verified by writing the `test_end_time_crosses_hour` test — if the arithmetic were wrong, that test would catch it.
+It also suggested adding a validator to `Task` to reject bad priority strings. Skipped that — the UI already limits the options, so it felt like unnecessary code.
+
+The main thing I learned is you have to stay in charge of what gets built. AI will give you something that works, but it doesn't know what tradeoffs matter for your specific project. That's on you.
 
 ---
 
@@ -72,31 +54,13 @@ I evaluated the tradeoff and kept `str` for the time field. `end_time()` does th
 
 **a. What you tested**
 
-The test suite (`tests/test_pawpal.py`) covers:
+The main things: task completion (both one-time and recurring), end_time arithmetic, sorting order, filter by pet, conflict detection, and that build_schedule only shows today's tasks. Also added tests for the JSON persistence round-trip and the next-available-slot algorithm once those got added.
 
-| Behaviour | Why it matters |
-|---|---|
-| `mark_complete` on a `once` task sets `completed = True` | Core state change — everything downstream depends on this |
-| `mark_complete` on a `daily` task advances `due_date` by 1, keeps `completed = False` | Recurrence is the trickiest logic in the system |
-| `mark_complete` on a `weekly` task advances `due_date` by 7 | Same reason |
-| `end_time()` arithmetic, including hour-crossing | Conflict detection relies on this being correct |
-| `is_due_today` returns `True` for overdue tasks | Ensures old tasks don't silently disappear |
-| Adding a task to a pet increases count | Validates `add_task` / list integrity |
-| `sort_by_time` returns tasks in chronological order | Core scheduling guarantee |
-| `sort_by_priority` returns high → medium → low | Core scheduling guarantee |
-| `filter_by_pet` returns only the right pet's tasks | Filtering correctness |
-| `detect_conflicts` catches overlapping windows | Conflict detection correctness |
-| Non-overlapping tasks produce no conflicts | True-negative test — equally important |
-| `build_schedule` excludes future-dated tasks | Ensures tomorrow's tasks don't pollute today's view |
+The recurring task tests were the most important since that logic is easy to get wrong — the task shouldn't be permanently "done," it should just move to the next day.
 
 **b. Confidence**
 
-High confidence for all tested behaviours. The suite has both positive and negative cases for the most critical paths.
-
-Edge cases to test next:
-- Tasks that span midnight (e.g., `23:30` + 60 minutes — `end_time()` would return `24:30`, which is not a valid time string; needs a clamp or day rollover).
-- Two pets with tasks at identical times (currently detected as a conflict; might want a "same-owner, same-time" vs. "different-pet" distinction).
-- An owner with zero pets calling `build_schedule` (currently returns an empty list — correct, but worth a dedicated test).
+Pretty confident in the core stuff — 42 tests all passing. The main thing I'd want to cover next is tasks that go past midnight (like 23:30 + 90 min), because `end_time()` would return something like `25:00` which isn't valid. That's a known gap but not a real use case for pet care so I left it.
 
 ---
 
@@ -104,14 +68,26 @@ Edge cases to test next:
 
 **a. What went well**
 
-The clean separation between `pawpal_system.py` (logic) and `app.py` (UI). Because the Scheduler returns plain Python lists of `(Pet, Task)` tuples, the Streamlit layer never needs to know how sorting or filtering works — it just iterates and renders. This made debugging much easier: I could verify all behaviour in `main.py` before touching the UI at all.
+Keeping the logic in `pawpal_system.py` separate from the UI made things a lot easier. I could test everything in the terminal with `main.py` before touching Streamlit. When something broke in the UI it was usually clear pretty fast whether it was a logic issue or a display issue.
 
 **b. What you would improve**
 
-The time field is the main rough edge. Using `"HH:MM"` strings was a pragmatic simplification, but it means the system can't handle tasks that cross midnight, can't easily compute "how many hours of care are scheduled today," and requires manual parsing in `end_time()`. A proper `datetime.time` field with duration as `timedelta` would be more robust.
+The `"HH:MM"` string for time is kind of a hack. It works but means you can't easily do things like "how many hours of care are scheduled today" without more parsing. Would switch to `datetime.time` if I rebuilt it.
 
-I'd also add the ability to edit or delete tasks from the Streamlit UI — currently you can only add them, which is limiting for real use.
+Also there's no way to delete or edit tasks in the UI right now which would be pretty annoying to use for real.
 
 **c. Key takeaway**
 
-Design the data model before thinking about the UI. Once `Task`, `Pet`, `Owner`, and `Scheduler` had clear, stable interfaces, the Streamlit layer almost wrote itself — every button just calls a method and calls `st.rerun()`. The investment in getting the class boundaries right up front paid off in how straightforward the integration phase was.
+Design the data model first before thinking about the UI. The Streamlit part was fast because the classes were already solid — every button just called a method and reran. If I had jumped straight to the UI it would've been a mess.
+
+---
+
+## 6. Prompt Comparison (Challenge 5)
+
+**Task:** `Scheduler.next_available_slot` — finds the first open gap in the schedule that fits a task of a given duration.
+
+**GPT-4o** suggested using `datetime` intervals and returning a full `datetime` object. Correct logic but assumed the whole codebase used `datetime`, which it doesn't.
+
+**Claude** suggested converting `"HH:MM"` to total minutes, scanning gaps, converting back. That matched what `end_time()` already does so it fit right in with no extra wrappers.
+
+Claude's version was better here because it matched the existing code. GPT's would've been fine in a different project. The takeaway is that "correct" depends on context — a suggestion that works in isolation can still be the wrong pick if it clashes with how the rest of the code is written.
